@@ -4,12 +4,11 @@ For Computer Networks; Video player (chunked media delivery)
 1 Team Information
 
  * Julian Spindola, Andrew Cadena, Oscar Lesage, Ben Johnson-Gomez, Christian Torres
-
  * Video Streaming (Chunked Media Delivery)
 
 2 Project Overview
-
-    A short summary of your project’s goals and what you intend to demonstrate.
+ 
+ *  We plan to make a simple, headless, no GUI video streaming application, metrics will be collected from logs rather than displayed video.
 
 3 Transport Protocol Design Plan
 
