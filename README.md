@@ -1,5 +1,6 @@
 # VideoPlayer-CNproject
 For Computer Networks; Video player (chunked media delivery)
+
 1 Team Information
 
  * Julian Spindola, Andrew Cadena, Oscar Lesage, Ben Johnson-Gomez, Christian Torres
