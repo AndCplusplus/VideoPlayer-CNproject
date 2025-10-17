@@ -2,16 +2,16 @@
 
 For Computer Networks; Video player (chunked media delivery)
 
-# 1 Team Information
+## 1 Team Information
 
 - Julian Spindola, Andrew Cadena, Oscar Lesage, Ben Johnson-Gomez, Christian Torres
 - Video Streaming (Chunked Media Delivery)
 
-# 2 Project Overview
+## 2 Project Overview
 
 - We plan to make a simple, headless, no GUI video streaming application, metrics will be collected from logs rather than displayed video.
 
-# 3 Transport Protocol Design Plan
+## 3 Transport Protocol Design Plan
 
 Given the need for low latency and minimal delay in video streaming, we plan to implement a hybrid protocol. UDP will be used for transmitting video data chunks to ensure fast delivery, while TCP will handle control signals such as play and pause to guarantee reliability for these commands. To ensure reliability with UDP, we will use a checksum method to verify data integrity, along with loss detection, to log dropped frames. Due to the importance of speed, we won’t attempt to retrieve dropped frames. For our TCP portion, we will implement basic TCP-like reliability controls such as ACKs and sequence numbers. These measures should hopefully handle most packet loss and duplication.
 
