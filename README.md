@@ -72,3 +72,139 @@ So far, only our tasks, objectives, and program file structure have been put in 
 3. Enhance the client by implementing buffering and playback.
 4. Develop loss and lateness logic, along with metrics.
 5. Test application with our loss simulation
+
+## 7 How to Run
+
+### Prerequisites
+
+- Python 3.x installed
+- The example video file `test.mp4` should be located in the `video_source/` directory
+
+### Running the Project
+
+#### Step 1: Start the Server
+
+Open a terminal/command prompt and navigate to the project directory. Start the server:
+
+```bash
+python server.py
+```
+
+You should see output indicating the server is listening:
+
+```
+Server listening on TCP 127.0.0.1:8000
+```
+
+**Keep this terminal window open** - the server must remain running.
+
+#### Step 2: Start the Client
+
+Open a **new** terminal/command prompt window and navigate to the project directory. Start the client:
+
+```bash
+python client.py
+```
+
+You should see:
+
+```
+Connected to server at 127.0.0.1:8000
+
+Video Streaming Client
+Commands: PLAY <video_filename> <udp_port> | STOP | QUIT
+--------------------------------------------------
+```
+
+#### Step 3: Play the Example Video
+
+In the client terminal, enter the PLAY command with the example video:
+
+```
+> PLAY test.mp4 9000
+```
+
+This command:
+
+- Requests the server to stream `test.mp4` from the `video_source/` directory
+- Sets up UDP reception on port `9000` (you can use any available port number)
+
+You should see output like:
+
+```
+Sent PLAY command for test.mp4 on UDP port 9000
+UDP socket bound to port 9000
+UDP receiver thread started
+Video player thread started
+Pre-buffering: waiting for 10 frames...
+Pre-buffering complete after XXX.XXms. Starting playback...
+PLAYED frame 0 (PTS: 0ms, delay: 0.00ms)
+PLAYED frame 1 (PTS: 41ms, delay: 0.00ms)
+...
+```
+
+#### Step 4: Stop Playback
+
+To stop the video and view metrics, enter:
+
+```
+> STOP
+```
+
+The client will:
+
+- Send a STOP command to the server
+- Display playback metrics including:
+  - Total frames played
+  - Total frames dropped
+  - Total stalls
+  - Max delay, average delay, and 95th percentile delay
+  - Average stall duration
+
+#### Step 5: Exit
+
+To exit the client, enter:
+
+```
+> QUIT
+```
+
+Or press `Ctrl+C` in either terminal to stop the server or client.
+
+### Example Session
+
+```
+> PLAY test.mp4 9000
+Sent PLAY command for test.mp4 on UDP port 9000
+UDP socket bound to port 9000
+UDP receiver thread started
+Video player thread started
+Pre-buffering: waiting for 10 frames...
+Pre-buffering complete after 450.23ms. Starting playback...
+PLAYED frame 0 (PTS: 0ms, delay: 0.00ms)
+PLAYED frame 1 (PTS: 41ms, delay: 0.00ms)
+...
+Video playback completed.
+
+==================================================
+PLAYBACK METRICS SUMMARY
+==================================================
+Total Frames Played: 37
+Total Frames Dropped: 0
+Total Stalls: 0
+Max Delay: 0.00 ms
+Average Delay: 0.00 ms
+95th Percentile Delay: 0.00 ms
+Average Stall Duration: 0.00 ms
+==================================================
+
+> QUIT
+Client closed.
+```
+
+### Notes
+
+- The video will automatically end when the stream completes, and metrics will be displayed automatically
+- You can play multiple videos in sequence by issuing multiple PLAY commands (after stopping the previous one)
+- Make sure the UDP port you specify (e.g., 9000) is not already in use by another application
+- The server supports multiple concurrent clients, each with their own TCP connection and UDP port
