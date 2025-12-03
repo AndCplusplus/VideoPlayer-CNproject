@@ -1,46 +1,31 @@
 import os
-import shutil
-from config import CHUNK_SIZE, CHUNKS_DIR, VIDEO_PATH
+from config import CHUNK_SIZE, FRAME_INTERVAL_MS
 
-def chunk_video():
-  """
-    Reads the source video file in binary mode and writes fixed-size
-    chunks to the output directory.
-  """
-  if not os.path.exists(VIDEO_PATH):
-    raise FileNotFoundError(f"Video file not found at {VIDEO_PATH}")
+class VideoChunker:
+  def __init__(self, video_path):
+    if not os.path.exists(video_path):
+      raise FileNotFoundError(f"Video file not found: {video_path}")
 
-  if os.path.exists(CHUNKS_DIR):
-    # clean directory
-    shutil.rmtree(CHUNKS_DIR)
+    self.file = open(video_path, 'rb')
+    self.frame_id = 0
+    self.total_bytes_read = 0
+    self.file_size = os.path.getsize(video_path)
 
-  os.makedirs(CHUNKS_DIR, exist_ok=True)
-  print(f"created output directory: {CHUNKS_DIR}")
-  
-  print(f"chunking video file: {VIDEO_PATH} into {CHUNKS_DIR}...")
+  def next_frame(self):
+    data = self.file.read(CHUNK_SIZE)
 
-  chunk_count = 0 
+    if not data:
+      return None, 0, True
 
-  try:
-    with open(VIDEO_PATH, 'rb') as video_file:
-      while True:
-        data = video_file.read(CHUNK_SIZE)
+    # Calculate the PTS (Presentation Timestamp) in milliseconds
+    pts_ms = self.frame_id * FRAME_INTERVAL_MS
 
-        if not data:
-          break
+    self.frame_id += 1
+    self.total_bytes_read += len(data)
 
-        chunk_name = f'chunk_{chunk_count:05d}.bin'
-        chunk_path = os.path.join(CHUNKS_DIR, chunk_name)
-        with open(chunk_path, 'wb') as chunk_file:
-          chunk_file.write(data)
+    is_last = self.total_bytes_read >= self.file_size
 
-        chunk_count += 1
+    return data, pts_ms, is_last
 
-        if chunk_count % 100 == 0:
-          print(f"wrote {chunk_count} chunks to {CHUNKS_DIR}")
-  except Exception as e:
-    print(f"Error chunking video file: {e}")
-    raise e
-
-if __name__ == '__main__':
-  chunk_video()
+  def close(self):
+    self.file.close()
