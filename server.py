@@ -12,9 +12,10 @@ import struct
 import time
 import zlib
 import os
+import math
 
 # Imports necessary network constants and video path/framerate
-from config import SERVER_IP, SERVER_CONTROL_PORT, BUFFER_SIZE, VIDEO_PATH, VIDEO_FPS
+from config import SERVER_IP, SERVER_CONTROL_PORT, BUFFER_SIZE, VIDEO_PATH, VIDEO_FPS, SOURCE_DIR, CHUNK_SIZE
 # Import the custom chunker class
 from video_chunker import VideoChunker
 
@@ -30,20 +31,21 @@ class Streamer(threading.Thread):
     """
     Reads frames using VideoChunker and sends them via UDP.
     """
-    def __init__(self, sock, client_addr):
+    def __init__(self, sock, client_addr, video_path):
         super().__init__()
         self.sock = sock
         self.client_addr = client_addr
         self._stop_event = threading.Event()
+        self.video_path = video_path
         
         # Use the real FPS from config
         self.frame_rate = VIDEO_FPS
         self.frame_interval = 1.0 / self.frame_rate
         
-        # Initialize the chunker for the configured video path
+        # Initialize the chunker for the specified video path
         try:
-            self.chunker = VideoChunker(VIDEO_PATH)
-            print(f"[STREAMER] Chunker initialized for video: {VIDEO_PATH}")
+            self.chunker = VideoChunker(video_path)
+            print(f"[STREAMER] Chunker initialized for video: {video_path}")
         except FileNotFoundError as e:
             print(f"[STREAMER] Error: {e}")
             self.chunker = None
@@ -137,6 +139,7 @@ class VideoServer:
         self.stream_thread = None
         self.current_client_addr = None
         self.is_running = False
+        self.has_active_stream = False  # Track if stream exists (even if thread finished)
 
     def setup_socket(self):
         """Binds the single UDP socket for control and data transmission."""
@@ -151,14 +154,25 @@ class VideoServer:
             print(f"[SERVER] Failed to bind socket: {e}")
             return False
 
-    def send_control_ack(self, client_addr, ack_seq):
-        """Sends an acknowledgment back to the client for a reliable control packet."""
-        # ACK Format: Type (B), AckedSeq (I)
+    def send_control_ack(self, client_addr, ack_seq, total_chunks=None):
+        """
+        Sends an acknowledgment back to the client for a reliable control packet.
+        For PLAY commands, includes total_chunks metadata.
+        ACK Format: Type (B), AckedSeq (I), [TotalChunks (I) if provided]
+        """
         ack_type = 10 # Custom ACK type
-        ack_packet = struct.pack('!BI', ack_type, ack_seq)
+        if total_chunks is not None:
+            # Extended ACK with metadata for PLAY commands
+            ack_packet = struct.pack('!BII', ack_type, ack_seq, total_chunks)
+        else:
+            # Standard ACK for STOP and other commands
+            ack_packet = struct.pack('!BI', ack_type, ack_seq)
         try:
             self.udp_sock.sendto(ack_packet, client_addr)
-            print(f"[ACK] Sent ACK for Seq: {ack_seq} to {client_addr}")
+            if total_chunks is not None:
+                print(f"[ACK] Sent ACK for Seq: {ack_seq} with total_chunks={total_chunks} to {client_addr}")
+            else:
+                print(f"[ACK] Sent ACK for Seq: {ack_seq} to {client_addr}")
         except Exception as e:
             print(f"[ACK] Failed to send ACK: {e}")
 
@@ -178,33 +192,65 @@ class VideoServer:
             print(f"[CTRL] Received command {cmd_type} (Seq: {seq_num}) from {client_addr}. Payload: {decoded_payload}")
 
             if cmd_type == CMD_PLAY:
-                if self.stream_thread and self.stream_thread.is_alive():
+                if self.has_active_stream and (self.stream_thread and self.stream_thread.is_alive()):
                     print("[CTRL] Stream already active. Ignoring PLAY.")
                 else:
+                    # Clean up any previous stream thread if it exists
+                    if self.stream_thread:
+                        if self.stream_thread.is_alive():
+                            self.stream_thread.stop()
+                            self.stream_thread.join(timeout=0.5)
+                        self.stream_thread = None
+                    
                     # Parse payload: "video_filename client_udp_port"
                     parts = decoded_payload.split()
-                    # video_filename = parts[0] # Server uses VIDEO_PATH from config now, but we can log it
+                    video_filename = parts[0]
                     client_data_port = int(parts[1]) 
                     
-                    self.current_client_addr = (client_addr[0], client_data_port)
+                    # Construct full path to video file in video_source directory
+                    video_path = os.path.join(SOURCE_DIR, video_filename)
                     
-                    # Start the streamer thread - No longer passes video_filename as it's implicit via config
-                    self.stream_thread = Streamer(self.udp_sock, self.current_client_addr)
-                    self.stream_thread.start()
-                    print(f"[CTRL] Starting stream: {VIDEO_PATH} to {self.current_client_addr}")
+                    # Validate that the video file exists
+                    if not os.path.exists(video_path):
+                        print(f"[CTRL] Error: Video file not found: {video_path}")
+                        # ACK will be sent at end of function without total_chunks
+                        total_chunks = None
+                    else:
+                        # Calculate total chunks from file size
+                        try:
+                            file_size = os.path.getsize(video_path)
+                            total_chunks = math.ceil(file_size / CHUNK_SIZE)
+                        except Exception as e:
+                            print(f"[CTRL] Warning: Could not calculate total chunks: {e}")
+                            total_chunks = None
+                        
+                        self.current_client_addr = (client_addr[0], client_data_port)
+                        
+                        # Start the streamer thread with the requested video file
+                        self.stream_thread = Streamer(self.udp_sock, self.current_client_addr, video_path)
+                        self.stream_thread.start()
+                        self.has_active_stream = True
+                        print(f"[CTRL] Starting stream: {video_path} to {self.current_client_addr}")
 
             elif cmd_type == CMD_STOP:
-                if self.stream_thread and self.stream_thread.is_alive():
-                    self.stream_thread.stop()
-                    self.stream_thread.join(timeout=2.0)
+                total_chunks = None  # No metadata for STOP
+                if self.has_active_stream:
+                    if self.stream_thread and self.stream_thread.is_alive():
+                        self.stream_thread.stop()
+                        self.stream_thread.join(timeout=2.0)
                     self.stream_thread = None
                     self.current_client_addr = None
+                    self.has_active_stream = False
                     print("[CTRL] Stopped active stream.")
                 else:
                     print("[CTRL] Received STOP, but no stream was active.")
             
             # Send ACK for the command to fulfill the reliable protocol
-            self.send_control_ack(client_addr, seq_num)
+            # Include total_chunks for PLAY commands
+            if cmd_type == CMD_PLAY:
+                self.send_control_ack(client_addr, seq_num, total_chunks)
+            else:
+                self.send_control_ack(client_addr, seq_num)
 
         except struct.error as e:
             print(f"[CTRL] Error unpacking control header: {e}. Packet size: {len(packet)}")
@@ -242,6 +288,7 @@ class VideoServer:
         if self.stream_thread and self.stream_thread.is_alive():
             self.stream_thread.stop()
             self.stream_thread.join(timeout=2.0)
+        self.has_active_stream = False
         
         if self.udp_sock:
             self.udp_sock.close()
