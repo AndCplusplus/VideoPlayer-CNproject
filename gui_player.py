@@ -130,10 +130,15 @@ class VideoPlayerGUI:
                 self.frame_label.config(text=f"Frame: {frame_num}")
             
             # Update progress bar
-            if total > 0:
-                progress = (frame_num / total) * 100
+            if total > 0 and total >= frame_num:
+                # Calculate progress as percentage, ensuring we don't exceed 100%
+                progress = min(100.0, (frame_num / total) * 100.0)
                 self.progress_var.set(progress)
+            elif total > 0:
+                # If frame_num exceeds total (shouldn't happen, but handle gracefully)
+                self.progress_var.set(100.0)
             else:
+                # No total known yet, keep at 0
                 self.progress_var.set(0)
                 
             # Schedule next update

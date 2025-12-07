@@ -454,10 +454,12 @@ class VideoClient:
                     
                     if frame_id == END_OF_STREAM_FRAME_ID:
                         print("[PLAYER] End of stream received.")
-                        # Update total frames estimate with actual frame count
+                        # Update total frames with actual frame count if not already set
                         if self.gui:
-                            self.total_frames_estimate = self.expected_frame_id
-                            self.gui.update_frame(self.expected_frame_id, b"", self.total_frames_estimate)
+                            if self.total_frames == 0:
+                                self.total_frames = self.expected_frame_id
+                            # Update GUI with final frame count
+                            self.gui.update_frame(self.expected_frame_id, b"", self.total_frames)
                         self.stream_ended = True
                         self.is_playing = False 
                         break
@@ -490,9 +492,9 @@ class VideoClient:
                     
                     # Update GUI if enabled
                     if self.gui:
-                        # Don't pass total_frames until we know it (when stream ends)
-                        # Just show current frame number
-                        self.gui.update_frame(frame_id + 1, frame_data, 0)
+                        # Pass the stored total_frames if available, otherwise 0
+                        # frame_id is 0-indexed, so we pass frame_id + 1 for display (1-indexed)
+                        self.gui.update_frame(frame_id + 1, frame_data, self.total_frames if self.total_frames > 0 else 0)
                     
                     self.expected_frame_id += 1
                     
