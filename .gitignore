@@ -1,2 +1,5 @@
 video_chunks/
 __pycache__/
+# Video source files (too large for git)
+video_source/*.mp4
+!video_source/test.mp4
