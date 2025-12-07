@@ -160,6 +160,8 @@ class VideoClient:
         self.stream_ended = False 
         # This tracks the next frame ID we expect to process
         self.expected_frame_id = 0
+        # Connection ID for this session (set when receiving first packet)
+        self.conn_id = None
         
         # Threads
         self.udp_thread = None
@@ -247,6 +249,7 @@ class VideoClient:
         self.is_receiving = True
         self.stream_ended = False
         self.expected_frame_id = 0
+        self.conn_id = None  # Reset connection ID for new session
         
         # Update GUI status
         if self.gui:
@@ -323,11 +326,14 @@ class VideoClient:
                         # This is a stray ACK from the control loop, ignore it here
                         continue
 
-                # Check for end-of-stream marker first (8 bytes: FrameID + Timestamp)
-                if len(packet) == 8:
+                # Data packet header size: conn_id (I), frame_id (I), pts_ms (f), len (I), checksum (I) = 20 bytes
+                DATA_PACKET_HEADER_SIZE = 20
+                
+                # Check for end-of-stream marker first (20 bytes header with no data)
+                if len(packet) == DATA_PACKET_HEADER_SIZE:
                     # This might be an end-of-stream marker
                     try:
-                        frame_id, timestamp = struct.unpack('!If', packet[:8])
+                        conn_id, frame_id, pts_ms, data_len, checksum = struct.unpack('!IIfII', packet[:DATA_PACKET_HEADER_SIZE])
                         if frame_id == END_OF_STREAM_FRAME_ID:
                             print("[UDP] Received end-of-stream marker from server.")
                             # Mark stream as ended so STOP command won't be sent
@@ -342,28 +348,57 @@ class VideoClient:
                         pass
 
                 # Assume packets larger than the control header size are video data
-                if len(packet) > CONTROL_PACKET_HEADER_SIZE:
-                    # Frame Data Packet Format: FrameID (I), Timestamp (f), CompressedData (variable)
-                    frame_id, timestamp = struct.unpack('!If', packet[:8])
-                    compressed_data = packet[8:]
-                    
-                    # Decompress the frame data
+                if len(packet) > CONTROL_PACKET_HEADER_SIZE and len(packet) >= DATA_PACKET_HEADER_SIZE:
+                    # Frame Data Packet Format: conn_id (I), frame_id (I), pts_ms (f), len (I), checksum (I), CompressedData (variable)
                     try:
-                        frame_data = zlib.decompress(compressed_data)
-                    except zlib.error:
-                        # Log error but keep receiving
+                        conn_id, frame_id, pts_ms, data_len, checksum = struct.unpack('!IIfII', packet[:DATA_PACKET_HEADER_SIZE])
+                        compressed_data = packet[DATA_PACKET_HEADER_SIZE:]
+                        
+                        # Verify packet length matches header
+                        if len(compressed_data) != data_len:
+                            print(f"[UDP] Packet length mismatch: header says {data_len}, actual {len(compressed_data)}. Dropping frame.")
+                            self.metrics.record_loss()
+                            continue
+                        
+                        # Verify checksum
+                        calculated_checksum = zlib.adler32(compressed_data) & 0xFFFFFFFF
+                        if calculated_checksum != checksum:
+                            print(f"[UDP] Checksum mismatch for frame {frame_id}. Dropping frame.")
+                            self.metrics.record_loss()
+                            continue
+                        
+                        # Store connection ID on first packet
+                        if self.conn_id is None:
+                            self.conn_id = conn_id
+                        # Verify connection ID matches (security/consistency check)
+                        elif self.conn_id != conn_id:
+                            print(f"[UDP] Connection ID mismatch: expected {self.conn_id}, got {conn_id}. Dropping frame.")
+                            self.metrics.record_loss()
+                            continue
+                        
+                        # Decompress the frame data
+                        try:
+                            frame_data = zlib.decompress(compressed_data)
+                        except zlib.error:
+                            # Log error but keep receiving
+                            print(f"[UDP] Decompression error for frame {frame_id}. Dropping frame.")
+                            self.metrics.record_loss()
+                            continue
+
+                        # Calculate latency (using current time - pts_ms converted to seconds)
+                        # Note: pts_ms is presentation timestamp, not send time, so this is approximate
+                        current_time = time.time() * 1000  # Convert to ms
+                        latency = (current_time - pts_ms) / 1000.0  # Convert back to seconds for metrics
+                        
+                        # Record metrics
+                        self.metrics.record_frame(len(packet), latency)
+
+                        # Put frame into the queue with priority (FrameID)
+                        self.frame_queue.put((frame_id, frame_data))
+                    except struct.error as e:
+                        print(f"[UDP] Error unpacking packet header: {e}. Dropping packet.")
                         self.metrics.record_loss()
                         continue
-
-                    # Calculate latency
-                    current_time = time.time()
-                    latency = current_time - timestamp
-                    
-                    # Record metrics
-                    self.metrics.record_frame(len(packet), latency)
-
-                    # Put frame into the queue with priority (FrameID)
-                    self.frame_queue.put((frame_id, frame_data))
                     
             except socket.timeout:
                 continue
@@ -446,9 +481,9 @@ class VideoClient:
 
                     # Display frame with total if available
                     if self.total_frames > 0:
-                        print(f"PLAYED frame {frame_id}/{self.total_frames} (PTS: {int(pts_ms)}ms, delay: {delay_output:.2f}ms)")
+                        print(f"PLAYED frame {frame_id + 1}/{self.total_frames} (PTS: {int(pts_ms)}ms, delay: {delay_output:.2f}ms)")
                     else:
-                        print(f"PLAYED frame {frame_id} (PTS: {int(pts_ms)}ms, delay: {delay_output:.2f}ms)")
+                        print(f"PLAYED frame {frame_id + 1} (PTS: {int(pts_ms)}ms, delay: {delay_output:.2f}ms)")
                     
                     # Record bytes delivered to the player for goodput calculation
                     self.metrics.record_delivery(len(frame_data))

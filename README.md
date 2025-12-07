@@ -13,25 +13,52 @@ For Computer Networks; Video player (chunked media delivery)
 
 ## 3 Transport Protocol Design Plan
 
-Given the need for low latency and minimal delay in video streaming, we plan to implement a hybrid protocol. UDP will be used for transmitting video data chunks to ensure fast delivery, while TCP will handle control signals such as play and pause to guarantee reliability for these commands. To ensure reliability with UDP, we will use a checksum method to verify data integrity, along with loss detection, to log dropped frames. Due to the importance of speed, we won’t attempt to retrieve dropped frames. For our TCP portion, we will implement basic TCP-like reliability controls such as ACKs and sequence numbers. These measures should hopefully handle most packet loss and duplication.
+Given the need for low latency and minimal delay in video streaming, we implement a UDP-based protocol with reliability mechanisms. **UDP is used for both control signals and video data transmission**. To ensure reliability for critical control commands (PLAY and STOP), we implement a **Stop-and-Wait** mechanism on top of UDP, which provides TCP-like reliability guarantees for these commands. Video data is transmitted as unreliable UDP packets to prioritize speed and low latency.
 
-For our TCP header, we will define a message format that contains the following fields:
+### Reliable Control Protocol (Stop-and-Wait)
 
-- `Command_Type`, a 1-byte integer to identify the message type (`1` = Play, `2` = Pause, etc.)
-- `Sequence_Number`, a 4-byte number to uniquely identify the particular command
-- `Payload_Length`, the length of the data following the header
+Control commands (PLAY and STOP) are sent over UDP with a custom reliability layer that implements Stop-and-Wait:
 
-Our timer will wait for an ACK from the receiver and time out if it is not received.
+- **Control Packet Format** (9-byte header + payload):
 
-For our UDP header, we will have the following fields:
+  - `Command_Type` (1 byte): Identifies the message type (`1` = Play, `2` = Stop)
+  - `Sequence_Number` (4 bytes): Uniquely identifies the particular command
+  - `Payload_Length` (4 bytes): Length of the data following the header
+  - `Payload` (variable): Command-specific data (e.g., "video_filename udp_port" for PLAY)
 
-- `conn_id`, this defines the unique ID of the connected client
-- `frame_id`, this will define the sequence number for the video frame, and helps with detecting packet loss
-- `pts_ms`, the Presentation Timestamp will tell the client what frame should be playing, helping detection of late packets and playback timing
-- `len`, the length of the video data in this packet
-- `checksum`, used to detect data corruption
+- **Reliability Mechanism**:
+  - The sender waits for an ACK after sending each command
+  - ACK format: `ACK_Type` (1 byte, value `10`), `Acked_Sequence_Number` (4 bytes), optional metadata (4 bytes for total_chunks in PLAY ACKs)
+  - Timeout-based retransmission: If no ACK is received within 0.5 seconds, the command is retransmitted
+  - Maximum of 5 retry attempts before giving up
+  - This ensures that control commands are reliably delivered, similar to TCP's reliability guarantees
 
-We will use code on our server, such as `time.sleep()`, to send packets at a steady rate.
+### Unreliable Video Data Protocol
+
+Video frames are transmitted as unreliable UDP packets to maximize throughput and minimize latency:
+
+- **Frame Data Packet Format** (20-byte header + compressed data):
+
+  - `conn_id` (4 bytes, unsigned int): Unique connection identifier for the client session
+  - `frame_id` (4 bytes, unsigned int): Sequence number for the video frame, helps detect packet loss and reordering
+  - `pts_ms` (4 bytes, float): Presentation Timestamp in milliseconds, indicates when the frame should be played
+  - `len` (4 bytes, unsigned int): Length of the compressed data payload in bytes
+  - `checksum` (4 bytes, unsigned int): Adler-32 checksum of the compressed data for integrity verification
+  - `Compressed_Data` (variable): Zlib-compressed video chunk data
+
+- **End-of-Stream Marker**:
+
+  - Special packet with 20-byte header where `frame_id = 0xFFFFFFFF`, `pts_ms = 0.0`, `len = 0`, and `checksum = 0`
+  - Signals the end of the video stream to the client
+
+- **Loss Handling**:
+  - Lost or corrupted frames are detected by checking for gaps in `frame_id` sequence
+  - Checksum verification ensures data integrity - corrupted packets are dropped
+  - Connection ID verification ensures packets belong to the current session
+  - Due to the importance of speed and real-time playback, dropped frames are not retransmitted
+  - Frame loss is logged for metrics collection
+
+The server uses `time.sleep()` to maintain a steady frame rate (24 FPS) when sending packets.
 
 ## 4 Application Layer Design Plan
 
@@ -45,7 +72,7 @@ Our client will interact with our server through the use of command-line argumen
 
 - This would inform the server to terminate the video stream for the current client connection.
 
-Concurrency is supported by ensuring that each TCP connection is managed by its own dedicated thread in the program. We will assign each connection its own ID that the UDP socket will manage to determine which client to send data to.
+Concurrency is supported by managing each client connection with its own dedicated streaming thread. The server uses a single UDP socket for both control and data transmission, with each client identified by their IP address and specified UDP port. When a client sends a PLAY command, the server creates a new streaming thread that sends video data to the client's specified UDP port.
 
 ## 5 Testing and Metrics Plan
 
@@ -67,7 +94,7 @@ These will be printed to the user when they enter STOP into the console.
 
 So far, only our tasks, objectives, and program file structure have been put in place to guide our development throughout the remainder of the semester. We plan to start the implementation of core features in steps:
 
-1. Start the implementation of `server.py` to accept TPC connections from multiple clients.
+1. Start the implementation of `server.py` to accept UDP control commands from multiple clients.
 2. Begin implementation of `client.py` to start the transfer of data.
 3. Enhance the client by implementing buffering and playback.
 4. Develop loss and lateness logic, along with metrics.
@@ -93,7 +120,8 @@ python server.py
 You should see output indicating the server is listening:
 
 ```
-Server listening on TCP 127.0.0.1:8000
+[SERVER] UDP Control/Data socket bound to 127.0.0.1:50000
+[SERVER] Listener thread started. Awaiting commands...
 ```
 
 **Keep this terminal window open** - the server must remain running.
@@ -109,11 +137,10 @@ python client.py
 You should see:
 
 ```
-Connected to server at 127.0.0.1:8000
+UDP socket bound to port 9000
 
-Video Streaming Client
-Commands: PLAY <video_filename> <udp_port> | STOP | QUIT
---------------------------------------------------
+--- Video Client CLI ---
+Available Commands: PLAY <file> <port>, STOP, QUIT
 ```
 
 #### Step 3: Play the Example Video
@@ -207,4 +234,5 @@ Client closed.
 - The video will automatically end when the stream completes, and metrics will be displayed automatically
 - You can play multiple videos in sequence by issuing multiple PLAY commands (after stopping the previous one)
 - Make sure the UDP port you specify (e.g., 9000) is not already in use by another application
-- The server supports multiple concurrent clients, each with their own TCP connection and UDP port
+- The server supports multiple concurrent clients, each with their own UDP port for receiving video data
+- Control commands use a reliable UDP protocol with Stop-and-Wait to ensure delivery

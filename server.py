@@ -38,6 +38,10 @@ class Streamer(threading.Thread):
         self._stop_event = threading.Event()
         self.video_path = video_path
         
+        # Generate a unique connection ID based on client address
+        # Using hash of client address to create a unique conn_id
+        self.conn_id = hash(f"{client_addr[0]}:{client_addr[1]}") & 0xFFFFFFFF
+        
         # Use the real FPS from config
         self.frame_rate = VIDEO_FPS
         self.frame_interval = 1.0 / self.frame_rate
@@ -51,7 +55,7 @@ class Streamer(threading.Thread):
             self.chunker = None
             self.stop()
         
-        print(f"[STREAMER] New streamer created for {client_addr} at {self.frame_rate} FPS")
+        print(f"[STREAMER] New streamer created for {client_addr} (conn_id: {self.conn_id}) at {self.frame_rate} FPS")
 
     def stop(self):
         """Signals the streamer thread to stop and closes the chunker."""
@@ -64,9 +68,9 @@ class Streamer(threading.Thread):
     def send_end_of_stream_marker(self):
         """Sends a special marker to the client to signal the end of the video."""
         print("[STREAMER] Sending End of Stream marker.")
-        timestamp = time.time()
-        # Data Packet Format: FrameID (I), Timestamp (f)
-        packet = struct.pack('!If', END_OF_STREAM_FRAME_ID, timestamp)
+        # End-of-stream marker uses special frame_id and zero values for other fields
+        # Format: conn_id (I), frame_id (I), pts_ms (f), len (I), checksum (I)
+        packet = struct.pack('!IIfII', self.conn_id, END_OF_STREAM_FRAME_ID, 0.0, 0, 0)
         self.sock.sendto(packet, self.client_addr)
 
     def run(self):
@@ -97,10 +101,15 @@ class Streamer(threading.Thread):
 
             # 3. Prepare and send the packet
             frame_id = self.chunker.frame_id - 1 # frame_id is incremented *after* reading
-            timestamp = start_time # Use send time as timestamp
+            # pts_ms is already provided by the chunker
+            data_len = len(compressed_data)
             
-            # Frame Data Packet Format: FrameID (I), Timestamp (f), CompressedData (variable)
-            header = struct.pack('!If', frame_id, timestamp)
+            # Calculate checksum of the compressed data
+            checksum = zlib.adler32(compressed_data) & 0xFFFFFFFF
+            
+            # Frame Data Packet Format: conn_id (I), frame_id (I), pts_ms (f), len (I), checksum (I), CompressedData (variable)
+            # Header: 20 bytes total
+            header = struct.pack('!IIfII', self.conn_id, frame_id, pts_ms, data_len, checksum)
             packet = header + compressed_data
             
             # Send the packet (Unreliable UDP)
@@ -182,6 +191,9 @@ class VideoServer:
         
         Packet Format: Type (B), SeqNum (I), PayloadLen (I), Payload (variable)
         """
+        # Initialize total_chunks to None for all command types
+        total_chunks = None
+        
         try:
             # Unpack control header
             cmd_type, seq_num, payload_len = struct.unpack('!BII', packet[:CONTROL_PACKET_HEADER_SIZE])
@@ -194,6 +206,7 @@ class VideoServer:
             if cmd_type == CMD_PLAY:
                 if self.has_active_stream and (self.stream_thread and self.stream_thread.is_alive()):
                     print("[CTRL] Stream already active. Ignoring PLAY.")
+                    total_chunks = None  # No new stream, so no total_chunks
                 else:
                     # Clean up any previous stream thread if it exists
                     if self.stream_thread:
