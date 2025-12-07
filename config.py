@@ -1,5 +1,3 @@
-# config.py
-
 import os
 
 # --- File Paths ---
@@ -16,9 +14,26 @@ CHUNKS_DIR = os.path.join(BASE_DIR, 'video_chunks')
 VIDEO_FILENAME = 'test.mp4'
 VIDEO_PATH = os.path.join(SOURCE_DIR, VIDEO_FILENAME)
 
-# --- Streaming Parameters ---
+
+# --- Network & Buffer Parameters ---
+
+# IP address of the server
+SERVER_IP = '127.0.0.1'
+
+# The port on the server that listens for RELIABLE UDP control commands (PLAY/STOP).
+# This replaces the old SERVER_TCP_PORT.
+SERVER_CONTROL_PORT = 50000
+
+# Buffer size for receiving/sending data packets (general socket buffer)
+BUFFER_SIZE = 65536 
+
+# Maximum size for a single UDP packet (payload limit for video data)
+UDP_PACKET_MAX_SIZE = 4096
+
+
+# --- Streaming & Chunker Parameters ---
+
 # Size of each chunk in bytes (e.g., 4KB)
-# A standard UDP payload is often ~1400 bytes, but your prompt suggested 1-4KB.
 CHUNK_SIZE = 4096  
 
 # Target duration of buffer in milliseconds
@@ -27,8 +42,3 @@ TARGET_BUFFER_MS = 1000
 # Video Framerate (simulated)
 VIDEO_FPS = 24
 FRAME_INTERVAL_MS = 1000 / VIDEO_FPS
-UDP_PACKET_MAX_SIZE = 4096
-SERVER_IP = '127.0.0.1'
-SERVER_TCP_PORT = 8000
-
-BUFFER_SIZE = 65536
