@@ -236,3 +236,4 @@ Client closed.
 - Make sure the UDP port you specify (e.g., 9000) is not already in use by another application
 - The server supports multiple concurrent clients, each with their own UDP port for receiving video data
 - Control commands use a reliable UDP protocol with Stop-and-Wait to ensure delivery
+- The project was tested using clumsy 0.3 to simulate packet loss across different profiles
